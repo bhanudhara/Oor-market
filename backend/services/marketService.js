@@ -31,11 +31,12 @@ async function recordActivity(client, message, type) {
   `);
 }
 
-export async function getMarket() {
+export async function getMarket(actor) {
   const [markets, farmers, sellers, commitments, activity] = await Promise.all([
     pool.query('SELECT name FROM markets ORDER BY sort_order'),
     pool.query(`
-      SELECT id, name, village, crop, available_kg AS "availableKg", grade, harvest
+      SELECT id, name, village, crop, available_kg AS "availableKg", grade, harvest,
+        owner_user_id AS "ownerUserId"
       FROM farmers ORDER BY sort_order DESC
     `),
     pool.query(`
@@ -52,16 +53,30 @@ export async function getMarket() {
     pool.query('SELECT id, message, time_label AS time, type FROM activity ORDER BY sort_order DESC LIMIT 8'),
   ]);
 
-  return withSummary({
+  const market = {
     markets: markets.rows.map((row) => row.name),
     farmers: farmers.rows,
     sellers: sellers.rows,
     commitments: commitments.rows,
     activity: activity.rows,
-  });
+  };
+
+  if (actor?.role === 'farmer') {
+    market.farmers = market.farmers.filter((farmer) => farmer.ownerUserId === actor.id || farmer.id === actor.profileId);
+    market.commitments = market.commitments.filter((commitment) => commitment.farmerId === actor.profileId);
+    market.activity = [];
+  } else if (actor?.role === 'seller') {
+    const seller = market.sellers.find((item) => item.id === actor.profileId);
+    market.sellers = seller ? [seller] : [];
+    market.farmers = seller ? market.farmers.filter((farmer) => farmer.crop === seller.crop) : [];
+    market.commitments = market.commitments.filter((commitment) => commitment.sellerId === actor.profileId);
+    market.activity = [];
+  }
+
+  return withSummary(market);
 }
 
-export async function commitFarmerLot({ farmerId, sellerId, quantityKg } = {}) {
+export async function commitFarmerLot({ farmerId, sellerId, quantityKg } = {}, actor) {
   if (!Number.isInteger(quantityKg) || quantityKg < 1) {
     throw createError(400, 'Enter a whole-number quantity greater than zero.');
   }
@@ -70,7 +85,7 @@ export async function commitFarmerLot({ farmerId, sellerId, quantityKg } = {}) {
   try {
     await client.query('BEGIN');
     const farmerResult = await client.query(`
-      SELECT id, name, crop, available_kg AS "availableKg"
+      SELECT id, name, crop, available_kg AS "availableKg", owner_user_id AS "ownerUserId"
       FROM farmers WHERE id = $1 FOR UPDATE
     `, [farmerId]);
     const sellerResult = await client.query(`
@@ -82,6 +97,9 @@ export async function commitFarmerLot({ farmerId, sellerId, quantityKg } = {}) {
     const seller = sellerResult.rows[0];
 
     if (!farmer || !seller) throw createError(404, 'Farmer or seller was not found.');
+    if (actor && farmer.ownerUserId !== actor.id && farmer.id !== actor.profileId) {
+      throw createError(403, 'You can only commit produce from your own listings.');
+    }
     if (farmer.crop !== seller.crop) throw createError(400, 'This buyer is not purchasing that crop.');
     if (quantityKg > farmer.availableKg) throw createError(400, 'That is more than the farmer has available.');
     if (quantityKg > seller.capacityKg - seller.filledKg) throw createError(400, 'That is more than the buyer has room for.');
@@ -102,13 +120,16 @@ export async function commitFarmerLot({ farmerId, sellerId, quantityKg } = {}) {
     client.release();
   }
 
-  return getMarket();
+  return getMarket(actor);
 }
 
-export async function updateSellerBid(sellerId, rawBid) {
+export async function updateSellerBid(sellerId, rawBid, actor) {
   const bidPerKg = Number(rawBid);
   if (!Number.isFinite(bidPerKg) || bidPerKg < 1 || bidPerKg > 10000) {
     throw createError(400, 'Enter a valid bid between Rs 1 and Rs 10,000 per kg.');
+  }
+  if (actor && sellerId !== actor.profileId) {
+    throw createError(403, 'You can only update your own seller bid.');
   }
 
   const client = await pool.connect();
@@ -129,19 +150,20 @@ export async function updateSellerBid(sellerId, rawBid) {
     client.release();
   }
 
-  return getMarket();
+  return getMarket(actor);
 }
 
-export async function createFarmerListing(listing = {}) {
+export async function createFarmerListing(listing = {}, actor) {
   const { name, village, crop, availableKg, grade } = listing;
+  const farmerName = actor?.displayName?.trim() || name?.trim();
   const quantity = Number(availableKg);
-  if (!name?.trim() || !village?.trim() || !crop?.trim() || !Number.isInteger(quantity) || quantity < 1) {
+  if (!farmerName || !village?.trim() || !crop?.trim() || !Number.isInteger(quantity) || quantity < 1) {
     throw createError(400, 'Add a name, village, crop, and whole-number quantity.');
   }
 
   const farmer = {
     id: `farmer-${randomUUID()}`,
-    name: name.trim(),
+    name: farmerName,
     village: village.trim(),
     crop: crop.trim(),
     availableKg: quantity,
@@ -152,9 +174,9 @@ export async function createFarmerListing(listing = {}) {
   try {
     await client.query('BEGIN');
     await client.query(`
-      INSERT INTO farmers (id, name, village, crop, available_kg, grade, harvest)
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
-    `, [farmer.id, farmer.name, farmer.village, farmer.crop, farmer.availableKg, farmer.grade, farmer.harvest]);
+      INSERT INTO farmers (id, name, village, crop, available_kg, grade, harvest, owner_user_id)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    `, [farmer.id, farmer.name, farmer.village, farmer.crop, farmer.availableKg, farmer.grade, farmer.harvest, actor?.id ?? null]);
     await recordActivity(client, `${farmer.name} listed ${quantity} kg of ${farmer.crop.toLowerCase()}`, 'listing');
     await client.query('COMMIT');
   } catch (error) {
@@ -164,5 +186,5 @@ export async function createFarmerListing(listing = {}) {
     client.release();
   }
 
-  return getMarket();
+  return getMarket(actor);
 }

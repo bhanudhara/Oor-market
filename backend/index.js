@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import express from 'express';
+import authRoutes from './routes/authRoutes.js';
 import marketRoutes from './routes/marketRoutes.js';
 import { initializeDatabase } from './db/initializeDatabase.js';
 import { pool } from './db/pool.js';
@@ -8,6 +9,7 @@ const app = express();
 const port = process.env.PORT || 3001;
 
 app.use(express.json());
+app.use('/api/auth', authRoutes);
 app.use('/api', marketRoutes);
 
 app.use((error, _request, response, _next) => {

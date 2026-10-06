@@ -1,7 +1,10 @@
 import { createAsyncThunk, createSlice } from '@reduxjs/toolkit';
 
 async function requestMarket(url, options) {
-  const response = await fetch(url, options);
+  const token = localStorage.getItem('oor-market-token');
+  const headers = { ...options?.headers };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const response = await fetch(url, { ...options, headers });
   const data = await response.json();
   if (!response.ok) throw new Error(data.error || 'Market request failed.');
   return data;

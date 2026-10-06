@@ -3,6 +3,16 @@ CREATE TABLE IF NOT EXISTS markets (
   sort_order BIGSERIAL NOT NULL UNIQUE
 );
 
+CREATE TABLE IF NOT EXISTS users (
+  id TEXT PRIMARY KEY,
+  email TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
+  role TEXT NOT NULL CHECK (role IN ('farmer', 'seller', 'admin')),
+  display_name TEXT NOT NULL,
+  profile_id TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS farmers (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
@@ -11,8 +21,11 @@ CREATE TABLE IF NOT EXISTS farmers (
   available_kg INTEGER NOT NULL CHECK (available_kg >= 0),
   grade TEXT NOT NULL CHECK (grade IN ('A', 'B')),
   harvest TEXT NOT NULL,
+  owner_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
   sort_order BIGSERIAL NOT NULL UNIQUE
 );
+
+ALTER TABLE farmers ADD COLUMN IF NOT EXISTS owner_user_id TEXT REFERENCES users(id) ON DELETE SET NULL;
 
 CREATE INDEX IF NOT EXISTS farmers_crop_idx ON farmers (crop);
 

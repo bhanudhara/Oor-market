@@ -5,17 +5,19 @@
   "type": "module",
   "scripts": {
     "dev": "concurrently -k -n api,web -c green,blue \"npm:server\" \"npm:client\"",
-    "server": "node server/index.js",
-    "client": "vite",
-    "build": "vite build",
+    "server": "node backend/index.js",
+    "client": "vite frontend --config frontend/vite.config.js",
+    "build": "vite build frontend --config frontend/vite.config.js",
     "db:up": "docker compose up -d db",
     "db:down": "docker compose down",
-    "start": "node server/index.js"
+    "start": "node backend/index.js"
   },
   "dependencies": {
     "@reduxjs/toolkit": "^2.8.2",
+    "bcryptjs": "^3.0.3",
     "dotenv": "^18.0.5",
     "express": "^5.1.0",
+    "jsonwebtoken": "^9.0.3",
     "lucide-react": "^0.468.0",
     "pg": "^8.16.3",
     "react": "^19.1.0",

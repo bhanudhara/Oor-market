@@ -10,7 +10,19 @@ Requirements: Node.js 20+ and a local PostgreSQL database.
 4. Start the API and React app with `npm run dev`.
 5. Open `http://localhost:5173`.
 
-The API creates its PostgreSQL tables on startup and imports the current `server/data/market.json` sample records only when the farmers and sellers tables are empty. Once imported, PostgreSQL is the source of truth.
+The API creates its PostgreSQL tables on startup and imports the current `backend/data/market.json` sample records only when the farmers and sellers tables are empty. Once imported, PostgreSQL is the source of truth.
+
+The project is separated into `frontend/` (React + Redux) and `backend/` (Express API, authentication, and PostgreSQL schema/services).
+
+## Demo logins
+
+| Role | Email | Password |
+| --- | --- | --- |
+| Farmer | `farmer@oor.local` | `Farmer@123` |
+| Seller | `seller@oor.local` | `Seller@123` |
+| Admin | `admin@oor.local` | `Admin@123` |
+
+Demo passwords are for local development only. Set a private `JWT_SECRET` in `.env` and change the demo passwords before deploying.
 
 Alternatively, if PostgreSQL is not already running and port 5432 is available, start the included local container with `npm run db:up`. It creates the `oor_market` database with local development credentials. Docker Desktop is required for this option.
 
