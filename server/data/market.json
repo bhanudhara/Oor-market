@@ -1,0 +1,127 @@
+{
+  "markets": [
+    "Thanjavur Central Market",
+    "Kumbakonam Market",
+    "Papanasam Uzhavar Sandhai",
+    "Ayyampettai Market"
+  ],
+  "farmers": [
+    {
+      "id": "farmer-1",
+      "name": "Muthuvel",
+      "village": "Kandiyur",
+      "crop": "Tomato",
+      "availableKg": 60,
+      "grade": "A",
+      "harvest": "Today"
+    },
+    {
+      "id": "farmer-2",
+      "name": "Selvi",
+      "village": "Thiruvaiyaru",
+      "crop": "Tomato",
+      "availableKg": 70,
+      "grade": "A",
+      "harvest": "Today"
+    },
+    {
+      "id": "farmer-3",
+      "name": "Velmurugan",
+      "village": "Thogur",
+      "crop": "Tomato",
+      "availableKg": 40,
+      "grade": "B",
+      "harvest": "Tomorrow"
+    },
+    {
+      "id": "farmer-4",
+      "name": "Kamala",
+      "village": "Papanasam",
+      "crop": "Onion",
+      "availableKg": 45,
+      "grade": "A",
+      "harvest": "Today"
+    },
+    {
+      "id": "farmer-5",
+      "name": "Mani",
+      "village": "Ayyampettai",
+      "crop": "Onion",
+      "availableKg": 55,
+      "grade": "A",
+      "harvest": "Today"
+    },
+    {
+      "id": "farmer-6",
+      "name": "Dinesh",
+      "village": "Thirumanur",
+      "crop": "Brinjal",
+      "availableKg": 80,
+      "grade": "A",
+      "harvest": "Today"
+    }
+  ],
+  "sellers": [
+    {
+      "id": "seller-1",
+      "name": "Malar Stores",
+      "market": "Thanjavur Central Market",
+      "crop": "Tomato",
+      "capacityKg": 130,
+      "filledKg": 0,
+      "bidPerKg": 31,
+      "distanceKm": 4.2
+    },
+    {
+      "id": "seller-2",
+      "name": "Gopi Vegetable Stall",
+      "market": "Kumbakonam Market",
+      "crop": "Tomato",
+      "capacityKg": 120,
+      "filledKg": 0,
+      "bidPerKg": 29,
+      "distanceKm": 8.5
+    },
+    {
+      "id": "seller-3",
+      "name": "Kavitha Fresh Mart",
+      "market": "Papanasam Uzhavar Sandhai",
+      "crop": "Onion",
+      "capacityKg": 100,
+      "filledKg": 0,
+      "bidPerKg": 38,
+      "distanceKm": 3.1
+    },
+    {
+      "id": "seller-4",
+      "name": "Rafiq Market Shop",
+      "market": "Ayyampettai Market",
+      "crop": "Brinjal",
+      "capacityKg": 100,
+      "filledKg": 0,
+      "bidPerKg": 34,
+      "distanceKm": 5.6
+    }
+  ],
+  "commitments": [],
+  "activity": [
+    {
+      "id": "activity-1",
+      "message": "Malar Stores is looking for up to 130 kg of tomatoes",
+      "time": "Just now",
+      "type": "demand"
+    },
+    {
+      "id": "activity-2",
+      "message": "Kamala listed 45 kg of fresh onions",
+      "time": "12 min ago",
+      "type": "listing"
+    },
+    {
+      "id": "activity-3",
+      "message": "Kavitha Fresh Mart raised its onion bid to Rs 38/kg",
+      "time": "28 min ago",
+      "type": "bid"
+    }
+  ]
+}

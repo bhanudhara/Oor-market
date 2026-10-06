@@ -1,0 +1,26 @@
+import 'dotenv/config';
+import express from 'express';
+import marketRoutes from './routes/marketRoutes.js';
+import { initializeDatabase } from './db/initializeDatabase.js';
+import { pool } from './db/pool.js';
+
+const app = express();
+const port = process.env.PORT || 3001;
+
+app.use(express.json());
+app.use('/api', marketRoutes);
+
+app.use((error, _request, response, _next) => {
+  console.error(error);
+  response.status(error.statusCode || 500).json({
+    error: error.statusCode ? error.message : 'The market could not be updated. Please try again.',
+  });
+});
+
+initializeDatabase()
+  .then(() => app.listen(port, () => console.log(`Market API listening on http://localhost:${port}`)))
+  .catch(async (error) => {
+    console.error('Could not initialize PostgreSQL:', error.message);
+    await pool.end();
+    process.exitCode = 1;
+  });
