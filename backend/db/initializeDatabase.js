@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import bcrypt from 'bcryptjs';
 import { pool } from './pool.js';
+import { runMigrations } from './runMigrations.js';
 
 const databaseDirectory = path.dirname(fileURLToPath(import.meta.url));
 const schemaPath = path.join(databaseDirectory, 'schema.sql');
@@ -33,6 +34,7 @@ async function seedDemoAccounts() {
 export async function initializeDatabase() {
   const schema = await fs.readFile(schemaPath, 'utf8');
   await pool.query(schema);
+  await runMigrations();
 
   const result = await pool.query(`
     SELECT NOT EXISTS (SELECT 1 FROM farmers) AND NOT EXISTS (SELECT 1 FROM sellers) AS is_empty
@@ -42,14 +44,20 @@ export async function initializeDatabase() {
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
-      for (const name of seed.markets) {
-        await client.query('INSERT INTO markets (name) VALUES ($1) ON CONFLICT (name) DO NOTHING', [name]);
+      for (const market of seed.markets) {
+        const record = typeof market === 'string' ? { name: market } : market;
+        await client.query(`
+          INSERT INTO markets (name, latitude, longitude) VALUES ($1, $2, $3)
+          ON CONFLICT (name) DO UPDATE SET
+            latitude = COALESCE(markets.latitude, EXCLUDED.latitude),
+            longitude = COALESCE(markets.longitude, EXCLUDED.longitude)
+        `, [record.name, record.latitude ?? null, record.longitude ?? null]);
       }
       for (const farmer of [...seed.farmers].reverse()) {
         await client.query(`
-          INSERT INTO farmers (id, name, village, crop, available_kg, grade, harvest)
-          VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (id) DO NOTHING
-        `, [farmer.id, farmer.name, farmer.village, farmer.crop, farmer.availableKg, farmer.grade, farmer.harvest]);
+          INSERT INTO farmers (id, name, village, crop, available_kg, grade, harvest, latitude, longitude)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (id) DO NOTHING
+        `, [farmer.id, farmer.name, farmer.village, farmer.crop, farmer.availableKg, farmer.grade, farmer.harvest, farmer.latitude ?? null, farmer.longitude ?? null]);
       }
       for (const seller of [...seed.sellers].reverse()) {
         await client.query(`

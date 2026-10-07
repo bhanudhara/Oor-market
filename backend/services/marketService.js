@@ -1,11 +1,16 @@
 import { randomUUID } from 'node:crypto';
 import { pool } from '../db/pool.js';
+import { defaultRadiusKm, marketCoordinates, radiusOptionsKm, transportCostPerKmKg, villageCoordinates } from '../config/nearby.js';
+import { approximateCoordinates, rankNearby } from './nearby.js';
+import { acceptOfferTransaction } from './acceptOfferTransaction.js';
 
 function createError(statusCode, message) {
   return Object.assign(new Error(message), { statusCode });
 }
 
 function withSummary(market) {
+  const distances = market.farmers.map((farmer) => farmer.nearestBuyerDistanceKm).filter(Number.isFinite);
+  const prices = market.farmers.map((farmer) => farmer.bestBidPerKg).filter(Number.isFinite);
   return {
     ...market,
     summary: {
@@ -14,6 +19,8 @@ function withSummary(market) {
       availableKg: market.farmers.reduce((sum, farmer) => sum + farmer.availableKg, 0),
       committedKg: market.sellers.reduce((sum, seller) => sum + seller.filledKg, 0),
       marketCount: market.markets.length,
+      averageDistanceKm: distances.length ? Number((distances.reduce((sum, value) => sum + value, 0) / distances.length).toFixed(1)) : 0,
+      averageBestPricePerKg: prices.length ? Number((prices.reduce((sum, value) => sum + value, 0) / prices.length).toFixed(2)) : 0,
     },
   };
 }
@@ -31,18 +38,20 @@ async function recordActivity(client, message, type) {
   `);
 }
 
-export async function getMarket(actor) {
-  const [markets, farmers, sellers, commitments, activity] = await Promise.all([
-    pool.query('SELECT name FROM markets ORDER BY sort_order'),
+export async function getMarket(actor, radiusInput = defaultRadiusKm) {
+  const radiusKm = radiusFor(radiusInput);
+  const [markets, farmers, sellers, commitments, activity, userResult] = await Promise.all([
+    pool.query('SELECT name, latitude, longitude FROM markets ORDER BY sort_order'),
     pool.query(`
       SELECT id, name, village, crop, available_kg AS "availableKg", grade, harvest,
-        owner_user_id AS "ownerUserId"
+        owner_user_id AS "ownerUserId", latitude, longitude
       FROM farmers ORDER BY sort_order DESC
     `),
     pool.query(`
-      SELECT id, name, market_name AS market, crop, capacity_kg AS "capacityKg",
-        filled_kg AS "filledKg", bid_per_kg::float8 AS "bidPerKg", distance_km::float8 AS "distanceKm"
-      FROM sellers ORDER BY sort_order DESC
+      SELECT s.id, s.name, s.market_name AS market, s.crop, s.capacity_kg AS "capacityKg",
+        s.filled_kg AS "filledKg", s.bid_per_kg::float8 AS "bidPerKg", s.distance_km::float8 AS "distanceKm",
+        m.latitude, m.longitude
+      FROM sellers s JOIN markets m ON m.name = s.market_name ORDER BY s.sort_order DESC
     `),
     pool.query(`
       SELECT id, farmer_id AS "farmerId", farmer_name AS "farmerName",
@@ -51,79 +60,100 @@ export async function getMarket(actor) {
       FROM commitments ORDER BY created_at DESC
     `),
     pool.query('SELECT id, message, time_label AS time, type FROM activity ORDER BY sort_order DESC LIMIT 8'),
+    actor?.id ? pool.query('SELECT latitude, longitude FROM users WHERE id = $1', [actor.id]) : Promise.resolve({ rows: [] }),
   ]);
 
   const market = {
-    markets: markets.rows.map((row) => row.name),
+    markets: markets.rows.map((row) => ({
+      name: row.name,
+      latitude: row.latitude ?? marketCoordinates[row.name]?.latitude ?? null,
+      longitude: row.longitude ?? marketCoordinates[row.name]?.longitude ?? null,
+    })),
     farmers: farmers.rows,
     sellers: sellers.rows,
     commitments: commitments.rows,
     activity: activity.rows,
   };
+  const savedUser = userResult.rows[0] ?? {};
 
   if (actor?.role === 'farmer') {
     market.farmers = market.farmers.filter((farmer) => farmer.ownerUserId === actor.id || farmer.id === actor.profileId);
-    market.commitments = market.commitments.filter((commitment) => commitment.farmerId === actor.profileId);
+    const farmerIds = new Set(market.farmers.map((farmer) => farmer.id));
+    market.commitments = market.commitments.filter((commitment) => farmerIds.has(commitment.farmerId));
     market.activity = [];
+    const ownProfile = market.farmers.find((farmer) => farmer.id === actor.profileId);
+    const origin = profileCoordinates(savedUser) ?? farmerCoordinates(ownProfile ?? {});
+    market.markets = rankNearby(market.markets, { origin, radiusKm, priceFor: () => 0 });
+    market.farmers = market.farmers.map((farmer) => {
+      const coordinates = farmerCoordinates(farmer);
+      const offers = rankNearby(market.sellers.filter((seller) => seller.crop === farmer.crop && seller.filledKg < seller.capacityKg), {
+        origin: profileCoordinates(savedUser) ?? coordinates,
+        radiusKm,
+        priceFor: (seller) => seller.bidPerKg,
+        costPerKmKg: transportCostPerKmKg(),
+      });
+      return {
+        ...farmer,
+        latitude: coordinates?.latitude ?? null,
+        longitude: coordinates?.longitude ?? null,
+        offers,
+        nearestBuyerDistanceKm: offers[0]?.distanceKm,
+        bestBidPerKg: offers[0]?.bidPerKg,
+      };
+    });
+    market.sellers = rankNearby(market.sellers, {
+      origin,
+      radiusKm,
+      priceFor: (seller) => seller.bidPerKg,
+      costPerKmKg: transportCostPerKmKg(),
+    });
   } else if (actor?.role === 'seller') {
     const seller = market.sellers.find((item) => item.id === actor.profileId);
-    market.sellers = seller ? [seller] : [];
-    market.farmers = seller ? market.farmers.filter((farmer) => farmer.crop === seller.crop) : [];
+    const origin = profileCoordinates(savedUser) ?? profileCoordinates(seller);
+    market.markets = rankNearby(market.markets, { origin, radiusKm, priceFor: () => 0 });
+    market.sellers = seller ? [{ ...seller, ...(origin ?? {}) }] : [];
+    const supply = seller ? rankNearby(market.farmers
+      .filter((farmer) => farmer.crop === seller.crop && farmer.availableKg > 0)
+      .map((farmer) => ({ ...farmer, ...(farmerCoordinates(farmer) ?? {}) })), {
+        origin,
+        radiusKm,
+        priceFor: () => seller.bidPerKg,
+      }) : [];
+    market.farmers = supply.map((farmer) => {
+      const approximate = approximateCoordinates(farmer.latitude, farmer.longitude);
+      const { latitude, longitude, ...villageOnly } = farmer;
+      return { ...villageOnly, approximateLatitude: approximate.latitude, approximateLongitude: approximate.longitude };
+    });
     market.commitments = market.commitments.filter((commitment) => commitment.sellerId === actor.profileId);
     market.activity = [];
+  } else if (actor?.role === 'admin') {
+    market.farmers = market.farmers.map((farmer) => {
+      const coordinates = farmerCoordinates(farmer);
+      const offers = rankNearby(market.sellers.filter((seller) => seller.crop === farmer.crop), {
+        origin: coordinates,
+        radiusKm: 50,
+        priceFor: (seller) => seller.bidPerKg,
+        costPerKmKg: transportCostPerKmKg(),
+      });
+      return { ...farmer, latitude: coordinates?.latitude ?? null, longitude: coordinates?.longitude ?? null, nearestBuyerDistanceKm: offers[0]?.distanceKm, bestBidPerKg: offers[0]?.bidPerKg };
+    });
   }
 
   return withSummary(market);
 }
 
-export async function commitFarmerLot({ farmerId, sellerId, quantityKg } = {}, actor) {
-  if (!Number.isInteger(quantityKg) || quantityKg < 1) {
-    throw createError(400, 'Enter a whole-number quantity greater than zero.');
-  }
-
+export async function commitFarmerLot({ farmerId, sellerId, quantityKg } = {}, actor, radiusKm = defaultRadiusKm) {
   const client = await pool.connect();
   try {
-    await client.query('BEGIN');
-    const farmerResult = await client.query(`
-      SELECT id, name, crop, available_kg AS "availableKg", owner_user_id AS "ownerUserId"
-      FROM farmers WHERE id = $1 FOR UPDATE
-    `, [farmerId]);
-    const sellerResult = await client.query(`
-      SELECT id, name, crop, capacity_kg AS "capacityKg", filled_kg AS "filledKg",
-        bid_per_kg::float8 AS "bidPerKg"
-      FROM sellers WHERE id = $1 FOR UPDATE
-    `, [sellerId]);
-    const farmer = farmerResult.rows[0];
-    const seller = sellerResult.rows[0];
-
-    if (!farmer || !seller) throw createError(404, 'Farmer or seller was not found.');
-    if (actor && farmer.ownerUserId !== actor.id && farmer.id !== actor.profileId) {
-      throw createError(403, 'You can only commit produce from your own listings.');
-    }
-    if (farmer.crop !== seller.crop) throw createError(400, 'This buyer is not purchasing that crop.');
-    if (quantityKg > farmer.availableKg) throw createError(400, 'That is more than the farmer has available.');
-    if (quantityKg > seller.capacityKg - seller.filledKg) throw createError(400, 'That is more than the buyer has room for.');
-
-    const commitmentId = `commitment-${randomUUID()}`;
-    await client.query('UPDATE farmers SET available_kg = available_kg - $1 WHERE id = $2', [quantityKg, farmerId]);
-    await client.query('UPDATE sellers SET filled_kg = filled_kg + $1 WHERE id = $2', [quantityKg, sellerId]);
-    await client.query(`
-      INSERT INTO commitments (id, farmer_id, farmer_name, seller_id, seller_name, crop, quantity_kg, price_per_kg)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-    `, [commitmentId, farmerId, farmer.name, sellerId, seller.name, farmer.crop, quantityKg, seller.bidPerKg]);
-    await recordActivity(client, `${farmer.name} committed ${quantityKg} kg of ${farmer.crop.toLowerCase()} to ${seller.name}`, 'commitment');
-    await client.query('COMMIT');
-  } catch (error) {
-    await client.query('ROLLBACK');
-    throw error;
+    await acceptOfferTransaction(client, { farmerId, sellerId, quantityKg, actor });
   } finally {
     client.release();
   }
 
-  return getMarket(actor);
+  return getMarket(actor, radiusKm);
 }
 
-export async function updateSellerBid(sellerId, rawBid, actor) {
+export async function updateSellerBid(sellerId, rawBid, actor, radiusKm = defaultRadiusKm) {
   const bidPerKg = Number(rawBid);
   if (!Number.isFinite(bidPerKg) || bidPerKg < 1 || bidPerKg > 10000) {
     throw createError(400, 'Enter a valid bid between Rs 1 and Rs 10,000 per kg.');
@@ -150,11 +180,11 @@ export async function updateSellerBid(sellerId, rawBid, actor) {
     client.release();
   }
 
-  return getMarket(actor);
+  return getMarket(actor, radiusKm);
 }
 
-export async function createFarmerListing(listing = {}, actor) {
-  const { name, village, crop, availableKg, grade } = listing;
+export async function createFarmerListing(listing = {}, actor, radiusKm = defaultRadiusKm) {
+  const { name, village, crop, availableKg, grade, latitude, longitude } = listing;
   const farmerName = actor?.displayName?.trim() || name?.trim();
   const quantity = Number(availableKg);
   if (!farmerName || !village?.trim() || !crop?.trim() || !Number.isInteger(quantity) || quantity < 1) {
@@ -169,14 +199,23 @@ export async function createFarmerListing(listing = {}, actor) {
     availableKg: quantity,
     grade: grade === 'B' ? 'B' : 'A',
     harvest: 'Today',
+    latitude: Number.isFinite(latitude) && Number.isFinite(longitude)
+      ? latitude
+      : villageCoordinates[village.trim()]?.latitude ?? null,
+    longitude: Number.isFinite(latitude) && Number.isFinite(longitude)
+      ? longitude
+      : villageCoordinates[village.trim()]?.longitude ?? null,
   };
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
     await client.query(`
-      INSERT INTO farmers (id, name, village, crop, available_kg, grade, harvest, owner_user_id)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-    `, [farmer.id, farmer.name, farmer.village, farmer.crop, farmer.availableKg, farmer.grade, farmer.harvest, actor?.id ?? null]);
+      INSERT INTO farmers (id, name, village, crop, available_kg, grade, harvest, owner_user_id, latitude, longitude)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+    `, [farmer.id, farmer.name, farmer.village, farmer.crop, farmer.availableKg, farmer.grade, farmer.harvest, actor?.id ?? null, farmer.latitude, farmer.longitude]);
+    if (farmer.latitude !== null && farmer.longitude !== null && actor?.id) {
+      await client.query('UPDATE users SET latitude = $1, longitude = $2 WHERE id = $3', [farmer.latitude, farmer.longitude, actor.id]);
+    }
     await recordActivity(client, `${farmer.name} listed ${quantity} kg of ${farmer.crop.toLowerCase()}`, 'listing');
     await client.query('COMMIT');
   } catch (error) {
@@ -186,5 +225,97 @@ export async function createFarmerListing(listing = {}, actor) {
     client.release();
   }
 
-  return getMarket(actor);
+  return getMarket(actor, radiusKm);
+}
+
+export async function updateFarmerListing(farmerId, listing = {}, actor, radiusKm = defaultRadiusKm) {
+  const { village, crop, availableKg, grade, latitude, longitude } = listing;
+  const quantity = Number(availableKg);
+  if (!village?.trim() || !crop?.trim() || !Number.isInteger(quantity) || quantity < 1) {
+    throw createError(400, 'Add a village, crop, and whole-number weight of at least 1 kg.');
+  }
+  const hasCoordinates = Number.isFinite(latitude) && Number.isFinite(longitude);
+  const coordinates = hasCoordinates
+    ? { latitude, longitude }
+    : villageCoordinates[village.trim()] ?? { latitude: null, longitude: null };
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await client.query(`
+      UPDATE farmers f SET village = $1, crop = $2, available_kg = $3, grade = $4,
+        latitude = $5, longitude = $6
+      WHERE f.id = $7 AND (f.owner_user_id = $8 OR f.id = $9)
+        AND NOT EXISTS (SELECT 1 FROM commitments c WHERE c.farmer_id = f.id)
+      RETURNING f.name
+    `, [village.trim(), crop.trim(), quantity, grade === 'B' ? 'B' : 'A', coordinates.latitude, coordinates.longitude, farmerId, actor.id, actor.profileId]);
+    if (!result.rowCount) throw createError(409, 'This listing has a commitment or is not yours, so it cannot be edited.');
+    if (coordinates.latitude !== null && coordinates.longitude !== null) {
+      await client.query('UPDATE users SET latitude = $1, longitude = $2 WHERE id = $3', [coordinates.latitude, coordinates.longitude, actor.id]);
+    }
+    await recordActivity(client, `${result.rows[0].name} updated a ${crop.toLowerCase()} listing`, 'listing');
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+  return getMarket(actor, radiusKm);
+}
+
+export async function withdrawFarmerListing(farmerId, actor, radiusKm = defaultRadiusKm) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await client.query(`
+      DELETE FROM farmers f
+      WHERE f.id = $1 AND (f.owner_user_id = $2 OR f.id = $3)
+        AND NOT EXISTS (SELECT 1 FROM commitments c WHERE c.farmer_id = f.id)
+      RETURNING f.name, f.crop
+    `, [farmerId, actor.id, actor.profileId]);
+    if (!result.rowCount) throw createError(409, 'This listing has a commitment or is not yours, so it cannot be withdrawn.');
+    await recordActivity(client, `${result.rows[0].name} withdrew a ${result.rows[0].crop.toLowerCase()} listing`, 'listing');
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+  return getMarket(actor, radiusKm);
+}
+
+export async function getDeals(actor) {
+  const result = await pool.query(`
+    SELECT d.id, d.farmer_id AS "farmerId", d.seller_id AS "sellerId",
+      f.name AS "farmerName", f.village, f.latitude AS "farmerLatitude", f.longitude AS "farmerLongitude",
+      s.name AS "sellerName", s.market_name AS market, m.latitude AS "sellerLatitude", m.longitude AS "sellerLongitude",
+      d.crop, d.quantity_kg AS "quantityKg", d.price_per_kg::float8 AS "pricePerKg",
+      d.total_price::float8 AS "totalPrice", d.status, d.created_at AS "createdAt"
+    FROM deals d JOIN farmers f ON f.id = d.farmer_id
+      JOIN sellers s ON s.id = d.seller_id JOIN markets m ON m.name = s.market_name
+    WHERE ($1 = 'admin')
+      OR ($1 = 'farmer' AND (d.farmer_id = $2 OR d.farmer_id IN (SELECT id FROM farmers WHERE owner_user_id = $4)))
+      OR ($1 = 'seller' AND d.seller_id = $3)
+    ORDER BY d.created_at DESC
+  `, [actor.role, actor.profileId, actor.profileId, actor.id]);
+
+  return result.rows.map((deal) => actor.role === 'seller' && deal.status !== 'Accepted'
+    ? { ...deal, farmerLatitude: null, farmerLongitude: null }
+    : deal);
+}
+
+function radiusFor(value) {
+  const radius = Number(value);
+  return radiusOptionsKm.includes(radius) ? radius : defaultRadiusKm;
+}
+
+function profileCoordinates(profile) {
+  return Number.isFinite(profile?.latitude) && Number.isFinite(profile?.longitude)
+    ? { latitude: profile.latitude, longitude: profile.longitude }
+    : null;
+}
+
+function farmerCoordinates(farmer) {
+  return profileCoordinates(farmer) ?? villageCoordinates[farmer.village] ?? null;
 }

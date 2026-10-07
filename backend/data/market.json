@@ -1,9 +1,9 @@
 {
   "markets": [
-    "Thanjavur Central Market",
-    "Kumbakonam Market",
-    "Papanasam Uzhavar Sandhai",
-    "Ayyampettai Market"
+    { "name": "Thanjavur Central Market", "latitude": 10.659037, "longitude": 79.2014278 },
+    { "name": "Kumbakonam Market", "latitude": 10.9604108, "longitude": 79.3820861 },
+    { "name": "Papanasam Uzhavar Sandhai", "latitude": 10.8604181, "longitude": 79.235816 },
+    { "name": "Ayyampettai Market", "latitude": 10.8962881, "longitude": 79.1886395 }
   ],
   "farmers": [
     {
@@ -13,7 +13,9 @@
       "crop": "Tomato",
       "availableKg": 60,
       "grade": "A",
-      "harvest": "Today"
+      "harvest": "Today",
+      "latitude": 10.8602519,
+      "longitude": 79.1077238
     },
     {
       "id": "farmer-2",
@@ -22,7 +24,9 @@
       "crop": "Tomato",
       "availableKg": 70,
       "grade": "A",
-      "harvest": "Today"
+      "harvest": "Today",
+      "latitude": 10.8797198,
+      "longitude": 79.1039298
     },
     {
       "id": "farmer-3",
@@ -31,7 +35,9 @@
       "crop": "Tomato",
       "availableKg": 40,
       "grade": "B",
-      "harvest": "Tomorrow"
+      "harvest": "Tomorrow",
+      "latitude": 10.8303344,
+      "longitude": 78.8110685
     },
     {
       "id": "farmer-4",
@@ -40,7 +46,9 @@
       "crop": "Onion",
       "availableKg": 45,
       "grade": "A",
-      "harvest": "Today"
+      "harvest": "Today",
+      "latitude": 10.8604181,
+      "longitude": 79.235816
     },
     {
       "id": "farmer-5",
@@ -49,7 +57,9 @@
       "crop": "Onion",
       "availableKg": 55,
       "grade": "A",
-      "harvest": "Today"
+      "harvest": "Today",
+      "latitude": 10.8962881,
+      "longitude": 79.1886395
     },
     {
       "id": "farmer-6",
@@ -58,7 +68,9 @@
       "crop": "Brinjal",
       "availableKg": 80,
       "grade": "A",
-      "harvest": "Today"
+      "harvest": "Today",
+      "latitude": 10.9351706,
+      "longitude": 79.1034943
     }
   ],
   "sellers": [

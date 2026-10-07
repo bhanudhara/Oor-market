@@ -4,9 +4,17 @@ import authRoutes from './routes/authRoutes.js';
 import marketRoutes from './routes/marketRoutes.js';
 import { initializeDatabase } from './db/initializeDatabase.js';
 import { pool } from './db/pool.js';
+import { jwtSecret } from './auth/authMiddleware.js';
 
 const app = express();
 const port = process.env.PORT || 3001;
+
+try {
+  jwtSecret();
+} catch (error) {
+  console.error(error.message);
+  process.exit(1);
+}
 
 app.use(express.json());
 app.use('/api/auth', authRoutes);

@@ -1,6 +1,12 @@
 import jwt from 'jsonwebtoken';
 
-export const jwtSecret = () => process.env.JWT_SECRET || 'local-development-secret-change-before-deploy';
+export function jwtSecret() {
+  const secret = process.env.JWT_SECRET;
+  if (!secret || secret.length < 32) {
+    throw new Error('Set a private JWT_SECRET of at least 32 characters in .env before starting the API.');
+  }
+  return secret;
+}
 
 export function authenticate(request, response, next) {
   const token = request.headers.authorization?.match(/^Bearer (.+)$/i)?.[1];
